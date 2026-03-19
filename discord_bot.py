@@ -38,32 +38,63 @@ RISK_COLORS = {
 }
 
 
+def _empty_result(display_text="無分析結果") -> dict:
+    return {
+        "display_text": display_text,
+        "url_results": [],
+        "number_results": [],
+        "content_result": None,
+        "summary": "",
+        "original_text": "",
+    }
+
+
 async def call_n8n(text: str, image_base64: Optional[str] = None) -> dict:
     """Send text (and optional image) to n8n webhook, return parsed response."""
     payload = {"text": text}
     if image_base64:
         payload["image_base64"] = image_base64
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            N8N_WEBHOOK_URL,
-            json=payload,
-            timeout=aiohttp.ClientTimeout(total=120),
-        ) as resp:
-            if resp.status == 200:
-                return await resp.json()
-            body = await resp.text()
-            log.error("n8n returned %d: %s", resp.status, body)
-            return {"display_text": f"n8n 回應錯誤 (HTTP {resp.status})", "url_results": [], "number_results": [], "content_result": None}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                N8N_WEBHOOK_URL,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=120),
+            ) as resp:
+                body_text = await resp.text()
+                log.info("n8n returned %d: %s", resp.status, body_text[:500])
+
+                if resp.status == 200:
+                    try:
+                        data = json.loads(body_text)
+                    except json.JSONDecodeError:
+                        return _empty_result(f"n8n 回傳非 JSON: {body_text[:200]}")
+
+                    if isinstance(data, list):
+                        data = data[0] if data else {}
+                    if isinstance(data, dict) and "json" in data:
+                        data = data["json"]
+                    if not isinstance(data, dict):
+                        return _empty_result(f"n8n 回傳格式不符: {type(data).__name__}")
+                    return data
+
+                return _empty_result(f"n8n 回應錯誤 (HTTP {resp.status})")
+    except Exception as e:
+        log.exception("Failed to call n8n webhook")
+        return _empty_result(f"無法連線 n8n: {e}")
 
 
 def determine_overall_risk(data: dict) -> str:
     """Pick the highest risk level from all results."""
+    if not data or not isinstance(data, dict):
+        return "SAFE"
+
     risk_priority = ["SCAM", "POTENTIAL_SCAM", "NO_RISK_FOR_NOW", "SAFE"]
 
     levels = set()
 
-    for u in data.get("url_results", []):
+    for u in (data.get("url_results") or []):
         score = u.get("score")
         if score is not None:
             if u.get("blacklisted"):
@@ -75,7 +106,7 @@ def determine_overall_risk(data: dict) -> str:
             else:
                 levels.add("SAFE")
 
-    for n in data.get("number_results", []):
+    for n in (data.get("number_results") or []):
         if n.get("spam_category"):
             levels.add("POTENTIAL_SCAM")
         elif n.get("name"):
@@ -93,6 +124,8 @@ def determine_overall_risk(data: dict) -> str:
 
 def build_embed(data: dict) -> discord.Embed:
     """Build a Discord embed from the n8n response."""
+    if not data or not isinstance(data, dict):
+        data = _empty_result()
     risk = determine_overall_risk(data)
     color = RISK_COLORS.get(risk, 0x95A5A6)
 
@@ -117,7 +150,7 @@ def build_embed(data: dict) -> discord.Embed:
             inline=False,
         )
 
-    for u in data.get("url_results", []):
+    for u in (data.get("url_results") or []):
         score = u.get("score")
         if score is not None:
             risk_text = "安全" if score >= 80 else ("中等風險" if score >= 50 else "高風險")
@@ -127,7 +160,7 @@ def build_embed(data: dict) -> discord.Embed:
             value = f"查詢失敗 (HTTP {u.get('http_status', '?')})"
         embed.add_field(name=f"🔗 {u.get('domain', u.get('url', '?'))}", value=value, inline=False)
 
-    for n in data.get("number_results", []):
+    for n in (data.get("number_results") or []):
         name = n.get("name")
         cats = n.get("business_categories", [])
         spam = n.get("spam_category")
@@ -155,6 +188,9 @@ def build_embed(data: dict) -> discord.Embed:
         if reminder:
             value += f"\n\n💡 {reminder}"
         embed.add_field(name="🖼️ 截圖分析", value=value[:1024], inline=False)
+
+    if not embed.fields and data.get("display_text"):
+        embed.add_field(name="分析結果", value=data["display_text"][:1024], inline=False)
 
     if data.get("summary"):
         embed.set_footer(text=f"LLM 摘要: {data['summary']}")
