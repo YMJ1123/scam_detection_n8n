@@ -1,0 +1,156 @@
+{
+  "info": {
+    "name": "AWS Hackathon 2026 詐騙識別防範 API - 網址風險查詢",
+    "description": "網址風險查詢 API，包含完整分析（/url-check）與快取查詢（/url-check-cache）。\n\n建議使用流程：\n  1. 先呼叫 POST /url-check-cache 查快取\n  2. 若回 200 → 直接使用結果\n  3. 若回 404（無快取）或 503（資料 > 30 天）→ 改呼叫 POST /url-check\n\nRate Limit: 1 RPS, Burst 2（兩個端點各自獨立計數）。\n使用前請將 api_key 變數替換為你的 API Key 值。",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "https://hljaj2f6gf.execute-api.ap-northeast-1.amazonaws.com/prod",
+      "type": "string"
+    },
+    {
+      "key": "api_key",
+      "value": "your-team-api-key-here",
+      "type": "string",
+      "description": "從 email 收到的 API Key"
+    }
+  ],
+  "item": [
+    {
+      "name": "POST /url-check-cache（快取查詢，建議先呼叫）",
+      "item": [
+        {
+          "name": "快取查詢（200 or 404）",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "x-api-key", "value": "{{api_key}}", "type": "text"},
+              {"key": "Content-Type", "value": "application/json", "type": "text"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://aws.amazon.com\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/url-check-cache",
+              "host": ["{{base_url}}"],
+              "path": ["url-check-cache"]
+            },
+            "description": "查詢快取結果：\n  200 → 快取命中（資料 < 30 天），直接使用 response body\n  404 → 無快取資料，改呼叫 POST /url-check\n  503 → 快取資料 > 30 天，可呼叫 /url-check 觸發重新掃描"
+          }
+        },
+        {
+          "name": "缺少 url 欄位 → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "x-api-key", "value": "{{api_key}}", "type": "text"},
+              {"key": "Content-Type", "value": "application/json", "type": "text"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/url-check-cache",
+              "host": ["{{base_url}}"],
+              "path": ["url-check-cache"]
+            },
+            "description": "缺少必填欄位 url，預期回 400 Bad Request。"
+          }
+        },
+        {
+          "name": "無 API Key → 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json", "type": "text"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://aws.amazon.com\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/url-check-cache",
+              "host": ["{{base_url}}"],
+              "path": ["url-check-cache"]
+            },
+            "description": "未帶 x-api-key header，預期回 403 Forbidden。"
+          }
+        }
+      ]
+    },
+    {
+      "name": "POST /url-check（完整分析，快取無資料時才呼叫）",
+      "item": [
+        {
+          "name": "完整分析（200）",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "x-api-key", "value": "{{api_key}}", "type": "text"},
+              {"key": "Content-Type", "value": "application/json", "type": "text"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://aws.amazon.com\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/url-check",
+              "host": ["{{base_url}}"],
+              "path": ["url-check"]
+            },
+            "description": "觸發完整分析（最長 25 秒）。成功回 200，response body 為 ScamAdviser 原始 JSON。\n建議僅在 /url-check-cache 回 404 或 503 時才呼叫此端點。"
+          }
+        },
+        {
+          "name": "缺少 url 欄位 → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "x-api-key", "value": "{{api_key}}", "type": "text"},
+              {"key": "Content-Type", "value": "application/json", "type": "text"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/url-check",
+              "host": ["{{base_url}}"],
+              "path": ["url-check"]
+            },
+            "description": "缺少必填欄位 url，預期回 400 Bad Request。"
+          }
+        },
+        {
+          "name": "無 API Key → 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json", "type": "text"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://aws.amazon.com\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/url-check",
+              "host": ["{{base_url}}"],
+              "path": ["url-check"]
+            },
+            "description": "未帶 x-api-key header，預期回 403 Forbidden。"
+          }
+        }
+      ]
+    }
+  ]
+}

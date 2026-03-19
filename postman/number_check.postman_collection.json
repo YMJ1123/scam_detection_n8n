@@ -1,0 +1,47 @@
+{
+  "info": {
+    "name": "AWS Hackathon 2026 詐騙識別防範 API - 電話號碼查詢",
+    "description": "電話號碼查詢 API。\nEndpoint: GET /number-check/{country}/{number}\nRate Limit: 1 RPS, Burst 2。\n使用前請將 api_key 變數替換為你的 API Key 值。",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "https://hljaj2f6gf.execute-api.ap-northeast-1.amazonaws.com/prod",
+      "type": "string"
+    },
+    {
+      "key": "api_key",
+      "value": "your-team-api-key-here",
+      "type": "string",
+      "description": "從 email 收到的 API Key"
+    }
+  ],
+  "item": [
+    {
+      "name": "GET /number-check/{country}/{number}",
+      "item": [
+        {
+          "name": "正常查詢（200）",
+          "request": {
+            "method": "GET",
+            "header": [
+              {"key": "x-api-key", "value": "{{api_key}}", "type": "text"}
+            ],
+            "url": "{{base_url}}/number-check/TW/%2B886289667000",
+            "description": "查詢電話號碼資訊。country 為 ISO 3166-1 alpha-2 國碼（如 TW），number 建議使用 E.164 格式（如 +886289667000）。"
+          }
+        },
+        {
+          "name": "無 API Key → 403",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/number-check/TW/%2B886289667000",
+            "description": "未帶 x-api-key header，預期回 403 Forbidden。"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,254 @@
+"""
+Anti-Fraud Discord Bot
+Receives user messages, sends them to n8n webhook for analysis,
+and replies with formatted results.
+"""
+
+import os
+import io
+import base64
+import json
+import logging
+from typing import Optional
+
+import aiohttp
+import discord
+from discord.ext import commands
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DISCORD_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "http://localhost:5678/webhook/anti-fraud")
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+log = logging.getLogger("anti-fraud-bot")
+
+intents = discord.Intents.default()
+intents.message_content = True
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+RISK_COLORS = {
+    "SAFE": 0x2ECC71,
+    "NO_RISK_FOR_NOW": 0xF1C40F,
+    "POTENTIAL_SCAM": 0xE67E22,
+    "SCAM": 0xE74C3C,
+    "FAILED": 0x95A5A6,
+}
+
+
+async def call_n8n(text: str, image_base64: Optional[str] = None) -> dict:
+    """Send text (and optional image) to n8n webhook, return parsed response."""
+    payload = {"text": text}
+    if image_base64:
+        payload["image_base64"] = image_base64
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            N8N_WEBHOOK_URL,
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=120),
+        ) as resp:
+            if resp.status == 200:
+                return await resp.json()
+            body = await resp.text()
+            log.error("n8n returned %d: %s", resp.status, body)
+            return {"display_text": f"n8n 回應錯誤 (HTTP {resp.status})", "url_results": [], "number_results": [], "content_result": None}
+
+
+def determine_overall_risk(data: dict) -> str:
+    """Pick the highest risk level from all results."""
+    risk_priority = ["SCAM", "POTENTIAL_SCAM", "NO_RISK_FOR_NOW", "SAFE"]
+
+    levels = set()
+
+    for u in data.get("url_results", []):
+        score = u.get("score")
+        if score is not None:
+            if u.get("blacklisted"):
+                levels.add("SCAM")
+            elif score < 50:
+                levels.add("SCAM")
+            elif score < 80:
+                levels.add("POTENTIAL_SCAM")
+            else:
+                levels.add("SAFE")
+
+    for n in data.get("number_results", []):
+        if n.get("spam_category"):
+            levels.add("POTENTIAL_SCAM")
+        elif n.get("name"):
+            levels.add("SAFE")
+
+    cr = data.get("content_result")
+    if cr and cr.get("category"):
+        levels.add(cr["category"])
+
+    for r in risk_priority:
+        if r in levels:
+            return r
+    return "SAFE"
+
+
+def build_embed(data: dict) -> discord.Embed:
+    """Build a Discord embed from the n8n response."""
+    risk = determine_overall_risk(data)
+    color = RISK_COLORS.get(risk, 0x95A5A6)
+
+    risk_label = {
+        "SAFE": "安全 Safe",
+        "NO_RISK_FOR_NOW": "目前無風險 No Risk For Now",
+        "POTENTIAL_SCAM": "疑似詐騙 Potential Scam",
+        "SCAM": "詐騙 Scam",
+        "FAILED": "分析失敗",
+    }
+
+    embed = discord.Embed(
+        title=f"防詐分析結果 — {risk_label.get(risk, risk)}",
+        color=color,
+    )
+
+    original = data.get("original_text", "")
+    if original:
+        embed.add_field(
+            name="原始訊息",
+            value=original[:200] + ("..." if len(original) > 200 else ""),
+            inline=False,
+        )
+
+    for u in data.get("url_results", []):
+        score = u.get("score")
+        if score is not None:
+            risk_text = "安全" if score >= 80 else ("中等風險" if score >= 50 else "高風險")
+            bl = " | 已列入黑名單" if u.get("blacklisted") else ""
+            value = f"信任分數: **{score}/100** ({risk_text}){bl}"
+        else:
+            value = f"查詢失敗 (HTTP {u.get('http_status', '?')})"
+        embed.add_field(name=f"🔗 {u.get('domain', u.get('url', '?'))}", value=value, inline=False)
+
+    for n in data.get("number_results", []):
+        name = n.get("name")
+        cats = n.get("business_categories", [])
+        spam = n.get("spam_category")
+        parts = []
+        if name:
+            parts.append(f"名稱: **{name}**")
+        if cats:
+            parts.append(f"類別: {', '.join(cats)}")
+        if spam:
+            parts.append(f"垃圾類別: **{spam}**")
+        if not parts:
+            parts.append("無相關紀錄")
+        embed.add_field(name=f"📞 {n.get('number', '?')}", value="\n".join(parts), inline=False)
+
+    cr = data.get("content_result")
+    if cr:
+        cat = cr.get("category", "?")
+        cat_emoji = {"SAFE": "✅", "NO_RISK_FOR_NOW": "🟡", "POTENTIAL_SCAM": "🟠", "SCAM": "🔴"}.get(cat, "❓")
+        title = cr.get("title", "")
+        content_lines = cr.get("content", [])
+        value = f"{cat_emoji} **{cat}**\n{title}"
+        if content_lines:
+            value += "\n" + "\n".join(f"• {l}" for l in content_lines)
+        reminder = cr.get("kindly_reminder")
+        if reminder:
+            value += f"\n\n💡 {reminder}"
+        embed.add_field(name="🖼️ 截圖分析", value=value[:1024], inline=False)
+
+    if data.get("summary"):
+        embed.set_footer(text=f"LLM 摘要: {data['summary']}")
+
+    return embed
+
+
+@bot.event
+async def on_ready():
+    log.info("Bot is ready: %s (ID: %s)", bot.user.name, bot.user.id)
+    try:
+        synced = await bot.tree.sync()
+        log.info("Synced %d slash commands", len(synced))
+    except Exception as e:
+        log.error("Failed to sync commands: %s", e)
+
+
+@bot.tree.command(name="check", description="分析訊息中的網址、電話是否為詐騙")
+async def slash_check(interaction: discord.Interaction, text: str, image: Optional[discord.Attachment] = None):
+    """Slash command: /check <text> [image]"""
+    await interaction.response.defer(thinking=True)
+
+    image_b64 = None
+    if image and image.content_type and image.content_type.startswith("image/"):
+        img_bytes = await image.read()
+        image_b64 = base64.b64encode(img_bytes).decode("utf-8")
+
+    try:
+        data = await call_n8n(text, image_b64)
+        embed = build_embed(data)
+        await interaction.followup.send(embed=embed)
+    except Exception as e:
+        log.exception("Error processing /check")
+        await interaction.followup.send(f"分析時發生錯誤: {e}")
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+
+    # Only respond when bot is mentioned or message starts with !check
+    is_mentioned = bot.user in message.mentions
+    is_command = message.content.startswith("!check")
+
+    if not is_mentioned and not is_command:
+        await bot.process_commands(message)
+        return
+
+    text = message.content
+    if is_command:
+        text = text[len("!check"):].strip()
+    else:
+        text = text.replace(f"<@{bot.user.id}>", "").replace(f"<@!{bot.user.id}>", "").strip()
+
+    if not text and not message.attachments:
+        await message.reply("請提供要分析的文字或圖片。用法：`!check <訊息>` 或 `@bot <訊息>`")
+        return
+
+    async with message.channel.typing():
+        image_b64 = None
+        for att in message.attachments:
+            if att.content_type and att.content_type.startswith("image/"):
+                img_bytes = await att.read()
+                image_b64 = base64.b64encode(img_bytes).decode("utf-8")
+                break
+
+        try:
+            data = await call_n8n(text, image_b64)
+            embed = build_embed(data)
+            await message.reply(embed=embed)
+        except Exception as e:
+            log.exception("Error processing message")
+            await message.reply(f"分析時發生錯誤: {e}")
+
+
+@bot.command(name="check")
+async def cmd_check(ctx: commands.Context, *, text: str = ""):
+    """Prefix command: !check <text>"""
+    # Handled by on_message for unified logic
+    pass
+
+
+def main():
+    if not DISCORD_TOKEN:
+        print("ERROR: DISCORD_BOT_TOKEN not set in .env")
+        print("Please add your Discord bot token to .env:")
+        print('  DISCORD_BOT_TOKEN=your-token-here')
+        return
+
+    log.info("Starting Anti-Fraud Discord Bot...")
+    log.info("n8n Webhook URL: %s", N8N_WEBHOOK_URL)
+    bot.run(DISCORD_TOKEN)
+
+
+if __name__ == "__main__":
+    main()
