@@ -17,9 +17,12 @@ def load_api_key():
     env_path = Path(__file__).parent / ".env"
     with open(env_path, "r") as f:
         for line in f:
+            line = line.strip()
+            if line.startswith("ANTI_FRAUD_API_KEY="):
+                return line.split("=", 1)[1]
             if line.startswith("x-api-key="):
-                return line.strip().split("=", 1)[1]
-    raise RuntimeError("找不到 x-api-key，請確認 .env 檔案")
+                return line.split("=", 1)[1]
+    raise RuntimeError("找不到 ANTI_FRAUD_API_KEY，請確認 .env 檔案")
 
 
 def api_request(method, path, headers=None, body=None):
