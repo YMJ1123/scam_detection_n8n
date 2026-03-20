@@ -17,7 +17,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// ============================================================\n// CONFIG: Paste your API keys here\n// ============================================================\nconst GROQ_API_KEY = 'YOUR_GROQ_API_KEY_HERE';\nconst ANTI_FRAUD_API_KEY = 'YOUR_ANTI_FRAUD_API_KEY_HERE';\n// ============================================================\n\nconst webhookData = $json;\n\nreturn [{\n  json: {\n    config: {\n      groq_api_key: GROQ_API_KEY,\n      anti_fraud_api_key: ANTI_FRAUD_API_KEY\n    },\n    body: webhookData.body\n  }\n}];"
+        "jsCode": "// Read API keys from webhook request body (sent by Discord bot)\nconst body = $json.body || {};\n\nreturn [{\n  json: {\n    config: {\n      groq_api_key: body.groq_api_key || '',\n      anti_fraud_api_key: body.anti_fraud_api_key || ''\n    },\n    body: body\n  }\n}];"
       },
       "id": "a1b2c3d4-0001-0001-0001-000000000010",
       "name": "Config",

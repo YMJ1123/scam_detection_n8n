@@ -20,6 +20,8 @@ load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "http://localhost:5678/webhook/anti-fraud")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+ANTI_FRAUD_API_KEY = os.getenv("ANTI_FRAUD_API_KEY", "")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("anti-fraud-bot")
@@ -51,7 +53,11 @@ def _empty_result(display_text="無分析結果") -> dict:
 
 async def call_n8n(text: str, image_base64: Optional[str] = None) -> dict:
     """Send text (and optional image) to n8n webhook, return parsed response."""
-    payload = {"text": text}
+    payload = {
+        "text": text,
+        "groq_api_key": GROQ_API_KEY,
+        "anti_fraud_api_key": ANTI_FRAUD_API_KEY,
+    }
     if image_base64:
         payload["image_base64"] = image_base64
 
