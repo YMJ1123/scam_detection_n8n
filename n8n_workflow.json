@@ -17,73 +17,23 @@
     },
     {
       "parameters": {
-        "jsCode": "// Read API keys from webhook request body (sent by Discord bot)\nconst body = $json.body || {};\n\nreturn [{\n  json: {\n    config: {\n      groq_api_key: body.groq_api_key || '',\n      anti_fraud_api_key: body.anti_fraud_api_key || ''\n    },\n    body: body\n  }\n}];"
-      },
-      "id": "a1b2c3d4-0001-0001-0001-000000000010",
-      "name": "Config",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [440, 300]
-    },
-    {
-      "parameters": {
-        "jsCode": "const userText = $json.body.text || '';\nconst hasImage = !!$json.body.image_base64;\n\nconst systemPrompt = `You are an anti-fraud analysis router. Analyze the user's message and extract:\n1. Any URLs (http://, https://, or bare domains like example.com)\n2. Any phone numbers (any format: +886..., 09..., 02-xxxx-xxxx, etc.)\n3. Whether an image was provided for content analysis\n\nReturn ONLY valid JSON:\n{\n  \"urls\": [\"https://example.com\"],\n  \"phones\": [{\"country\": \"TW\", \"number\": \"+886289667000\"}],\n  \"need_content_check\": false,\n  \"summary\": \"brief description of what was found\"\n}\n\nRules:\n- For Taiwan numbers without country code (e.g. 0289667000, 09xx), remove leading 0, prepend +886, set country to \"TW\"\n- For URLs without protocol, prepend https://\n- Set need_content_check to true ONLY if has_image is true\n- If nothing is found, return empty arrays\n- ONLY return the JSON object, no markdown, no explanation`;\n\nconst userMessage = userText + '\\n\\n[has_image: ' + hasImage + ']';\n\nreturn [{\n  json: {\n    groq_body: {\n      model: 'llama-3.3-70b-versatile',\n      messages: [\n        { role: 'system', content: systemPrompt },\n        { role: 'user', content: userMessage }\n      ],\n      temperature: 0,\n      max_tokens: 512,\n      response_format: { type: 'json_object' }\n    },\n    original_text: userText,\n    image_base64: $json.body.image_base64 || null\n  }\n}];"
+        "jsCode": "// Read API keys and user input from webhook body\nconst body = $json.body || {};\nconst GROQ_KEY = body.groq_api_key || '';\nconst FRAUD_KEY = body.anti_fraud_api_key || '';\nconst userText = body.text || '';\nconst hasImage = !!body.image_base64;\n\n// Build Groq LLM prompt\nconst systemPrompt = `You are an anti-fraud analysis router. Analyze the user's message and extract:\n1. Any URLs (http://, https://, or bare domains like example.com)\n2. Any phone numbers (any format: +886..., 09..., 02-xxxx-xxxx, etc.)\n3. Whether an image was provided for content analysis\n\nReturn ONLY valid JSON:\n{\n  \"urls\": [\"https://example.com\"],\n  \"phones\": [{\"country\": \"TW\", \"number\": \"+886289667000\"}],\n  \"need_content_check\": false,\n  \"summary\": \"brief description of what was found\"\n}\n\nRules:\n- For Taiwan numbers without country code (e.g. 0289667000, 09xx), remove leading 0, prepend +886, set country to \"TW\"\n- For URLs without protocol, prepend https://\n- Set need_content_check to true ONLY if has_image is true\n- If nothing is found, return empty arrays\n- ONLY return the JSON object, no markdown, no explanation`;\n\nconst groqBody = {\n  model: 'llama-3.3-70b-versatile',\n  messages: [\n    { role: 'system', content: systemPrompt },\n    { role: 'user', content: userText + '\\n\\n[has_image: ' + hasImage + ']' }\n  ],\n  temperature: 0,\n  max_tokens: 512,\n  response_format: { type: 'json_object' }\n};\n\n// Call Groq API\nlet parsed;\ntry {\n  const groqResp = await this.helpers.httpRequest({\n    method: 'POST',\n    url: 'https://api.groq.com/openai/v1/chat/completions',\n    headers: {\n      'Authorization': 'Bearer ' + GROQ_KEY,\n      'Content-Type': 'application/json'\n    },\n    body: groqBody,\n    json: true,\n    timeout: 15000\n  });\n  const content = groqResp.choices[0].message.content;\n  parsed = JSON.parse(content);\n} catch (e) {\n  parsed = { urls: [], phones: [], need_content_check: false, summary: 'LLM error: ' + e.message };\n}\n\nreturn [{\n  json: {\n    urls: parsed.urls || [],\n    phones: parsed.phones || [],\n    need_content_check: !!parsed.need_content_check && hasImage,\n    summary: parsed.summary || '',\n    original_text: userText,\n    image_base64: body.image_base64 || null,\n    anti_fraud_api_key: FRAUD_KEY\n  }\n}];"
       },
       "id": "a1b2c3d4-0001-0001-0001-000000000002",
-      "name": "Prepare Groq Request",
+      "name": "LLM Router",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [660, 300]
+      "position": [480, 300]
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "https://api.groq.com/openai/v1/chat/completions",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Authorization",
-              "value": "=Bearer {{ $('Config').first().json.config.groq_api_key }}"
-            },
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($json.groq_body) }}",
-        "options": {
-          "timeout": 15000
-        }
-      },
-      "id": "a1b2c3d4-0001-0001-0001-000000000003",
-      "name": "Groq LLM Router",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [880, 300]
-    },
-    {
-      "parameters": {
-        "jsCode": "const groqResp = $json;\nconst prevData = $('Prepare Groq Request').first().json;\n\nlet parsed;\ntry {\n  const content = groqResp.choices[0].message.content;\n  parsed = JSON.parse(content);\n} catch (e) {\n  parsed = { urls: [], phones: [], need_content_check: false, summary: 'LLM parse error: ' + e.message };\n}\n\nreturn [{\n  json: {\n    urls: parsed.urls || [],\n    phones: parsed.phones || [],\n    need_content_check: !!parsed.need_content_check,\n    summary: parsed.summary || '',\n    original_text: prevData.original_text,\n    image_base64: prevData.image_base64\n  }\n}];"
-      },
-      "id": "a1b2c3d4-0001-0001-0001-000000000004",
-      "name": "Parse LLM Output",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [1100, 300]
-    },
-    {
-      "parameters": {
-        "jsCode": "const data = $json;\nconst API_KEY = $('Config').first().json.config.anti_fraud_api_key;\nconst BASE = 'https://hljaj2f6gf.execute-api.ap-northeast-1.amazonaws.com/prod';\n\nconst results = { url_results: [], number_results: [], content_result: null };\nconst self = this;\n\n// --- URL Check ---\nfor (let i = 0; i < data.urls.length; i++) {\n  const url = data.urls[i];\n  if (i > 0) await new Promise(r => setTimeout(r, 1100));\n  try {\n    const d = await self.helpers.httpRequest({\n      method: 'POST',\n      url: `${BASE}/url-check`,\n      headers: { 'x-api-key': API_KEY, 'Content-Type': 'application/json' },\n      body: { url },\n      json: true\n    });\n    results.url_results.push({\n      url, http_status: 200,\n      score: d.score ?? null,\n      domain: d.domain ?? url,\n      blacklisted: d.blacklisted ?? null\n    });\n  } catch (e) {\n    results.url_results.push({ url, http_status: e.statusCode || 0, error: e.message });\n  }\n}\n\n// --- Number Check ---\nfor (let i = 0; i < data.phones.length; i++) {\n  const phone = data.phones[i];\n  if (i > 0) await new Promise(r => setTimeout(r, 1100));\n  try {\n    const d = await self.helpers.httpRequest({\n      method: 'GET',\n      url: `${BASE}/number-check/${phone.country}/${encodeURIComponent(phone.number)}`,\n      headers: { 'x-api-key': API_KEY },\n      json: true\n    });\n    results.number_results.push({\n      number: phone.number, country: phone.country, http_status: 200,\n      name: d.data?.name ?? null,\n      business_categories: d.data?.business_categories ?? [],\n      spam_category: d.data?.spam_category ?? null\n    });\n  } catch (e) {\n    results.number_results.push({ number: phone.number, country: phone.country, http_status: e.statusCode || 0, error: e.message });\n  }\n}\n\n// --- Content Check ---\nif (data.need_content_check && data.image_base64) {\n  try {\n    const uploadBody = await self.helpers.httpRequest({\n      method: 'POST',\n      url: `${BASE}/content-check`,\n      headers: { 'x-api-key': API_KEY, 'Content-Type': 'application/json', 'Accept-Language': 'zh-TW' },\n      body: { region: 'TW', image: data.image_base64 },\n      json: true\n    });\n    const jobId = uploadBody.job_id;\n    if (jobId) {\n      for (let attempt = 0; attempt < 20; attempt++) {\n        await new Promise(r => setTimeout(r, 3000));\n        try {\n          const p = await self.helpers.httpRequest({\n            method: 'GET',\n            url: `${BASE}/content-check/${jobId}`,\n            headers: { 'x-api-key': API_KEY, 'Accept-Language': 'zh-TW' },\n            json: true\n          });\n          if (p.status === 3) {\n            results.content_result = {\n              job_id: jobId, category: p.category, title: p.title,\n              content: p.content, urls: p.urls, numbers: p.numbers,\n              kindly_reminder: p.kindly_reminder\n            };\n            break;\n          }\n          if (p.status === 2) {\n            results.content_result = { job_id: jobId, category: 'FAILED', title: 'Processing failed' };\n            break;\n          }\n        } catch (pollErr) { /* keep polling */ }\n      }\n    }\n  } catch (e) {\n    results.content_result = { error: e.message };\n  }\n}\n\n// --- Build display text ---\nconst lines = [];\nfor (const u of results.url_results) {\n  if (u.score != null) {\n    const risk = u.score >= 80 ? '安全' : u.score >= 50 ? '中等風險' : '高風險';\n    lines.push(`URL ${u.domain}: 信任分數 ${u.score}/100 (${risk})${u.blacklisted ? ' [已列入黑名單]' : ''}`);\n  } else {\n    lines.push(`URL ${u.url}: 查詢失敗 (HTTP ${u.http_status})`);\n  }\n}\nfor (const n of results.number_results) {\n  if (n.name) {\n    lines.push(`Phone ${n.number}: ${n.name} (${n.business_categories.join(', ')})${n.spam_category ? ' [SPAM: ' + n.spam_category + ']' : ''}`);\n  } else if (n.spam_category) {\n    lines.push(`Phone ${n.number}: ${n.spam_category}`);\n  } else {\n    lines.push(`Phone ${n.number}: 無相關紀錄`);\n  }\n}\nif (results.content_result) {\n  const c = results.content_result;\n  lines.push(`Screenshot: ${c.category} - ${c.title}`);\n  if (c.content) c.content.forEach(l => lines.push(`  ${l}`));\n}\nif (lines.length === 0) {\n  lines.push('未偵測到網址、電話號碼或圖片。');\n}\n\nreturn [{\n  json: {\n    summary: data.summary,\n    display_text: lines.join('\\n'),\n    url_results: results.url_results,\n    number_results: results.number_results,\n    content_result: results.content_result,\n    original_text: data.original_text\n  }\n}];"
+        "jsCode": "const data = $json;\nconst API_KEY = data.anti_fraud_api_key;\nconst BASE = 'https://hljaj2f6gf.execute-api.ap-northeast-1.amazonaws.com/prod';\n\nconst results = { url_results: [], number_results: [], content_result: null };\nconst self = this;\n\n// --- URL Check ---\nfor (let i = 0; i < data.urls.length; i++) {\n  const url = data.urls[i];\n  if (i > 0) await new Promise(r => setTimeout(r, 1100));\n  try {\n    const d = await self.helpers.httpRequest({\n      method: 'POST',\n      url: `${BASE}/url-check`,\n      headers: { 'x-api-key': API_KEY, 'Content-Type': 'application/json' },\n      body: { url },\n      json: true\n    });\n    results.url_results.push({\n      url, http_status: 200,\n      score: d.score ?? null,\n      domain: d.domain ?? url,\n      blacklisted: d.blacklisted ?? null\n    });\n  } catch (e) {\n    results.url_results.push({ url, http_status: e.statusCode || 0, error: e.message });\n  }\n}\n\n// --- Number Check ---\nfor (let i = 0; i < data.phones.length; i++) {\n  const phone = data.phones[i];\n  if (i > 0) await new Promise(r => setTimeout(r, 1100));\n  try {\n    const d = await self.helpers.httpRequest({\n      method: 'GET',\n      url: `${BASE}/number-check/${phone.country}/${encodeURIComponent(phone.number)}`,\n      headers: { 'x-api-key': API_KEY },\n      json: true\n    });\n    results.number_results.push({\n      number: phone.number, country: phone.country, http_status: 200,\n      name: d.data?.name ?? null,\n      business_categories: d.data?.business_categories ?? [],\n      spam_category: d.data?.spam_category ?? null\n    });\n  } catch (e) {\n    results.number_results.push({ number: phone.number, country: phone.country, http_status: e.statusCode || 0, error: e.message });\n  }\n}\n\n// --- Content Check ---\nif (data.need_content_check && data.image_base64) {\n  try {\n    const uploadBody = await self.helpers.httpRequest({\n      method: 'POST',\n      url: `${BASE}/content-check`,\n      headers: { 'x-api-key': API_KEY, 'Content-Type': 'application/json', 'Accept-Language': 'zh-TW' },\n      body: { region: 'TW', image: data.image_base64 },\n      json: true\n    });\n    const jobId = uploadBody.job_id;\n    if (jobId) {\n      for (let attempt = 0; attempt < 20; attempt++) {\n        await new Promise(r => setTimeout(r, 3000));\n        try {\n          const p = await self.helpers.httpRequest({\n            method: 'GET',\n            url: `${BASE}/content-check/${jobId}`,\n            headers: { 'x-api-key': API_KEY, 'Accept-Language': 'zh-TW' },\n            json: true\n          });\n          if (p.status === 3) {\n            results.content_result = {\n              job_id: jobId, category: p.category, title: p.title,\n              content: p.content, urls: p.urls, numbers: p.numbers,\n              kindly_reminder: p.kindly_reminder\n            };\n            break;\n          }\n          if (p.status === 2) {\n            results.content_result = { job_id: jobId, category: 'FAILED', title: 'Processing failed' };\n            break;\n          }\n        } catch (pollErr) { /* keep polling */ }\n      }\n    }\n  } catch (e) {\n    results.content_result = { error: e.message };\n  }\n}\n\n// --- Build display text ---\nconst lines = [];\nfor (const u of results.url_results) {\n  if (u.score != null) {\n    const risk = u.score >= 80 ? '安全' : u.score >= 50 ? '中等風險' : '高風險';\n    lines.push(`URL ${u.domain}: 信任分數 ${u.score}/100 (${risk})${u.blacklisted ? ' [已列入黑名單]' : ''}`);\n  } else {\n    lines.push(`URL ${u.url}: 查詢失敗 (HTTP ${u.http_status})`);\n  }\n}\nfor (const n of results.number_results) {\n  if (n.name) {\n    lines.push(`Phone ${n.number}: ${n.name} (${n.business_categories.join(', ')})${n.spam_category ? ' [SPAM: ' + n.spam_category + ']' : ''}`);\n  } else if (n.spam_category) {\n    lines.push(`Phone ${n.number}: ${n.spam_category}`);\n  } else {\n    lines.push(`Phone ${n.number}: 無相關紀錄`);\n  }\n}\nif (results.content_result) {\n  const c = results.content_result;\n  lines.push(`Screenshot: ${c.category} - ${c.title}`);\n  if (c.content) c.content.forEach(l => lines.push(`  ${l}`));\n}\nif (lines.length === 0) {\n  lines.push('未偵測到網址、電話號碼或圖片。');\n}\n\nreturn [{\n  json: {\n    summary: data.summary,\n    display_text: lines.join('\\n'),\n    url_results: results.url_results,\n    number_results: results.number_results,\n    content_result: results.content_result,\n    original_text: data.original_text\n  }\n}];"
       },
       "id": "a1b2c3d4-0001-0001-0001-000000000005",
       "name": "Call APIs and Merge",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1320, 300]
+      "position": [740, 300]
     },
     {
       "parameters": {
@@ -97,23 +47,14 @@
       "name": "Respond to Webhook",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [1540, 300]
+      "position": [1000, 300]
     }
   ],
   "connections": {
     "Webhook Trigger": {
-      "main": [[{ "node": "Config", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "LLM Router", "type": "main", "index": 0 }]]
     },
-    "Config": {
-      "main": [[{ "node": "Prepare Groq Request", "type": "main", "index": 0 }]]
-    },
-    "Prepare Groq Request": {
-      "main": [[{ "node": "Groq LLM Router", "type": "main", "index": 0 }]]
-    },
-    "Groq LLM Router": {
-      "main": [[{ "node": "Parse LLM Output", "type": "main", "index": 0 }]]
-    },
-    "Parse LLM Output": {
+    "LLM Router": {
       "main": [[{ "node": "Call APIs and Merge", "type": "main", "index": 0 }]]
     },
     "Call APIs and Merge": {
