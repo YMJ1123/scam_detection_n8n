@@ -26,7 +26,7 @@ WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "http://localhost:5678/webhook/anti-f
 def test_webhook(text: str, image_path: str = None):
     payload = {
         "text": text,
-        "groq_api_key": os.getenv("GROQ_API_KEY", ""),
+        "bedrock_api_key": os.getenv("BEDROCK_API_KEY", ""),
         "anti_fraud_api_key": os.getenv("ANTI_FRAUD_API_KEY", ""),
     }
 

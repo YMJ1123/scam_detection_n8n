@@ -20,7 +20,7 @@ load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "http://localhost:5678/webhook/anti-fraud")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+BEDROCK_API_KEY = os.getenv("BEDROCK_API_KEY", "")
 ANTI_FRAUD_API_KEY = os.getenv("ANTI_FRAUD_API_KEY", "")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -55,7 +55,7 @@ async def call_n8n(text: str) -> dict:
     """Send text to n8n webhook, return parsed response."""
     payload = {
         "text": text,
-        "groq_api_key": GROQ_API_KEY,
+        "bedrock_api_key": BEDROCK_API_KEY,
         "anti_fraud_api_key": ANTI_FRAUD_API_KEY,
     }
 
