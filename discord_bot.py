@@ -51,15 +51,13 @@ def _empty_result(display_text="無分析結果") -> dict:
     }
 
 
-async def call_n8n(text: str, image_base64: Optional[str] = None) -> dict:
-    """Send text (and optional image) to n8n webhook, return parsed response."""
+async def call_n8n(text: str) -> dict:
+    """Send text to n8n webhook, return parsed response."""
     payload = {
         "text": text,
         "groq_api_key": GROQ_API_KEY,
         "anti_fraud_api_key": ANTI_FRAUD_API_KEY,
     }
-    if image_base64:
-        payload["image_base64"] = image_base64
 
     try:
         async with aiohttp.ClientSession() as session:
@@ -129,29 +127,22 @@ def determine_overall_risk(data: dict) -> str:
 
 
 def build_embed(data: dict) -> discord.Embed:
-    """Build a Discord embed from the n8n response."""
+    """Build a Discord embed from the n8n response in a technical list format."""
     if not data or not isinstance(data, dict):
         data = _empty_result()
     risk = determine_overall_risk(data)
     color = RISK_COLORS.get(risk, 0x95A5A6)
 
-    risk_label = {
-        "SAFE": "安全 Safe",
-        "NO_RISK_FOR_NOW": "目前無風險 No Risk For Now",
-        "POTENTIAL_SCAM": "疑似詐騙 Potential Scam",
-        "SCAM": "詐騙 Scam",
-        "FAILED": "分析失敗",
-    }
-
     embed = discord.Embed(
-        title=f"防詐分析結果 — {risk_label.get(risk, risk)}",
+        title=f"Technical Analysis Result: {risk}",
         color=color,
+        description="Raw API extracted properties:"
     )
 
     original = data.get("original_text", "")
     if original:
         embed.add_field(
-            name="原始訊息",
+            name="Original Extracted Text",
             value=original[:200] + ("..." if len(original) > 200 else ""),
             inline=False,
         )
@@ -159,41 +150,34 @@ def build_embed(data: dict) -> discord.Embed:
     for u in (data.get("url_results") or []):
         score = u.get("score")
         if score is not None:
-            risk_text = "安全" if score >= 80 else ("中等風險" if score >= 50 else "高風險")
-            bl = " | 已列入黑名單" if u.get("blacklisted") else ""
-            value = f"信任分數: **{score}/100** ({risk_text}){bl}"
+            value_lines = [
+                f"`Score`: {score}/100",
+                f"`Score Status`: {u.get('score_status')}",
+                f"`Blacklisted`: {u.get('blacklisted')}",
+                f"`Cached Result`: {u.get('cached')}",
+                f"`Registration Created`: {u.get('registration_created')}",
+                f"`Registrant Country`: {u.get('registrant_country')}",
+                f"`Registrar Name`: {u.get('registrar_name')}",
+                f"`SSL Valid`: {u.get('ssl_valid')}",
+                f"`SSL Issuer`: {u.get('ssl_issuer')}",
+                f"`Phishing Count`: {u.get('phishing_count', 0)}",
+                f"`Threat Count`: {u.get('threat_count', 0)}",
+                f"`Page Views`: {u.get('pageview')}",
+                f"`Redirected URLs`: {', '.join(u.get('redirected_urls', [])) if u.get('redirected_urls') else 'None'}"
+            ]
+            value = "\n".join(value_lines)
         else:
-            value = f"查詢失敗 (HTTP {u.get('http_status', '?')})"
-        embed.add_field(name=f"🔗 {u.get('domain', u.get('url', '?'))}", value=value, inline=False)
+            value = f"Query Failed (HTTP {u.get('http_status', '?')})"
+        embed.add_field(name=f"🌐 URL: {u.get('domain', u.get('url', '?'))}", value=value, inline=False)
 
     for n in (data.get("number_results") or []):
-        name = n.get("name")
-        cats = n.get("business_categories", [])
-        spam = n.get("spam_category")
-        parts = []
-        if name:
-            parts.append(f"名稱: **{name}**")
-        if cats:
-            parts.append(f"類別: {', '.join(cats)}")
-        if spam:
-            parts.append(f"垃圾類別: **{spam}**")
-        if not parts:
-            parts.append("無相關紀錄")
-        embed.add_field(name=f"📞 {n.get('number', '?')}", value="\n".join(parts), inline=False)
-
-    cr = data.get("content_result")
-    if cr:
-        cat = cr.get("category", "?")
-        cat_emoji = {"SAFE": "✅", "NO_RISK_FOR_NOW": "🟡", "POTENTIAL_SCAM": "🟠", "SCAM": "🔴"}.get(cat, "❓")
-        title = cr.get("title", "")
-        content_lines = cr.get("content", [])
-        value = f"{cat_emoji} **{cat}**\n{title}"
-        if content_lines:
-            value += "\n" + "\n".join(f"• {l}" for l in content_lines)
-        reminder = cr.get("kindly_reminder")
-        if reminder:
-            value += f"\n\n💡 {reminder}"
-        embed.add_field(name="🖼️ 截圖分析", value=value[:1024], inline=False)
+        value_lines = [
+            f"`Real Name`: {n.get('name')}",
+            f"`Region`: {n.get('region')}",
+            f"`Business Categories`: {', '.join(n.get('business_categories', []))}",
+            f"`Spam Category`: {n.get('spam_category')}"
+        ]
+        embed.add_field(name=f"📞 Phone: {n.get('number', '?')}", value="\n".join(value_lines), inline=False)
 
     if not embed.fields and data.get("display_text"):
         embed.add_field(name="分析結果", value=data["display_text"][:1024], inline=False)
@@ -215,17 +199,12 @@ async def on_ready():
 
 
 @bot.tree.command(name="check", description="分析訊息中的網址、電話是否為詐騙")
-async def slash_check(interaction: discord.Interaction, text: str, image: Optional[discord.Attachment] = None):
-    """Slash command: /check <text> [image]"""
+async def slash_check(interaction: discord.Interaction, text: str):
+    """Slash command: /check <text>"""
     await interaction.response.defer(thinking=True)
 
-    image_b64 = None
-    if image and image.content_type and image.content_type.startswith("image/"):
-        img_bytes = await image.read()
-        image_b64 = base64.b64encode(img_bytes).decode("utf-8")
-
     try:
-        data = await call_n8n(text, image_b64)
+        data = await call_n8n(text)
         embed = build_embed(data)
         await interaction.followup.send(embed=embed)
     except Exception as e:
@@ -252,20 +231,13 @@ async def on_message(message: discord.Message):
     else:
         text = text.replace(f"<@{bot.user.id}>", "").replace(f"<@!{bot.user.id}>", "").strip()
 
-    if not text and not message.attachments:
-        await message.reply("請提供要分析的文字或圖片。用法：`!check <訊息>` 或 `@bot <訊息>`")
+    if not text:
+        await message.reply("請提供要分析的文字。用法：`!check <訊息>` 或 `@bot <訊息>`")
         return
 
     async with message.channel.typing():
-        image_b64 = None
-        for att in message.attachments:
-            if att.content_type and att.content_type.startswith("image/"):
-                img_bytes = await att.read()
-                image_b64 = base64.b64encode(img_bytes).decode("utf-8")
-                break
-
         try:
-            data = await call_n8n(text, image_b64)
+            data = await call_n8n(text)
             embed = build_embed(data)
             await message.reply(embed=embed)
         except Exception as e:
